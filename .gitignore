@@ -1,0 +1,10 @@
+__pycache__
+data/
+venv/
+pyvenv/
+dist/
+build/
+*.egg-info/
+*.log
+*.pyc
+*.vagrant
