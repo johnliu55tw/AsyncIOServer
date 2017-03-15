@@ -1,45 +1,34 @@
 #!/usr/bin/env python3
-
 import argparse
-import selectors
-import socket
 import ssl
+import asyncio
 
 
-def createServerSocket(host, port, listenNumber=100):
-    serverSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    serverSock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    serverSock.bind((host, port))
-    serverSock.listen(listenNumber)
-    serverSock.setblocking(False)
-    return serverSock
+class EchoServerClientProtocol(asyncio.Protocol):
 
+    def __init__(self):
+        self.transport = None
+        self.peername = None
+        self.buffer = b""
 
-def clientRead(selectorObj, clientSock, mask):
-    try:
-        data = clientSock.recv(1000)  # Should be ready
-        if not data:
-            raise EOFError("No data received.")
-        else:
-            print("Data received from {}: {}".format(
-                clientSock.getsockname(), data))
-            clientSock.send(b"\xFF\x01\x00\x00\xFF\x01\x00\x00")
-    except Exception as e:
-        print('{}: Error: {}. Closing.'.format(
-            clientSock.getsockname(), repr(e)))
-        selectorObj.unregister(clientSock)
-        clientSock.close()
+    def connection_made(self, transport):
+        self.peername = transport.get_extra_info('peername')
+        self.transport = transport
+        print('Accepted connection from {}'.format(self.peername))
 
+    def data_received(self, data):
+        print('Data received from {}: {}'.format(
+            self.peername, data))
+        self.transport.write(b"\xFF\x01\x00\x00\xFF\x01\x00\x00")
 
-def acceptClientSocket(selectorObj, serverSock, mask):
-    clientSock, addr = serverSock.accept()  # Should be ready
-    print('Port {}: Accepted regular connection from: {}'.format(
-        serverSock.getsockname()[1], addr))
-    clientSock.setblocking(False)
-    selectorObj.register(clientSock, selectors.EVENT_READ, clientRead)
+    def connection_lost(self, exc):
+        print("Lost connection from: {}".format(
+            self.peername, exc))
+        self.transport.close()
 
 
 if __name__ == "__main__":
+    # Parsing arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', type=str, default="0.0.0.0",
                         help="The host to listen on. Default to 0.0.0.0")
@@ -55,27 +44,28 @@ if __name__ == "__main__":
                         help="The path of the private key *.key file.")
     args = parser.parse_args()
 
-    sel = selectors.DefaultSelector()
-    # Register server socket
+    # Create server event loop
+    loop = asyncio.get_event_loop()
     if args.ssl is True:
-        print("Waiting for SSL connection on {}:{}".format(
-            args.host, args.port))
-        serverSock = ssl.wrap_socket(
-                sock=createServerSocket(args.host, args.port, args.listen),
-                keyfile=args.key,
-                certfile=args.cert,
-                server_side=True)
+        sslCtx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        sslCtx.load_cert_chain(certfile=args.cert,
+                               keyfile=args.key)
+        coro = loop.create_server(EchoServerClientProtocol,
+                                  args.host, args.port,
+                                  ssl=sslCtx)
     else:
-        print("Waiting for unencrypted TCP connection on {}:{}".format(
-            args.host, args.port))
-        serverSock = createServerSocket(args.host, args.port, args.listen)
+        coro = loop.create_server(EchoServerClientProtocol,
+                                  args.host, args.port)
+    server = loop.run_until_complete(coro)
 
-    sel.register(serverSock,
-                 selectors.EVENT_READ,
-                 acceptClientSocket)
+    # Serve requests until Ctrl+C is pressed
+    print('Serving on {}'.format(server.sockets[0].getsockname()))
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
 
-    while True:
-        events = sel.select()
-        for key, mask in events:
-            callback = key.data
-            callback(sel, key.fileobj, mask)
+    # Close the server
+    server.close()
+    loop.run_until_complete(server.wait_closed())
+    loop.close()
