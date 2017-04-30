@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import sys
 import argparse
 import ssl
 import asyncio
+import show_data
 
 
 class EchoServerClientProtocol(asyncio.Protocol):
@@ -9,16 +11,19 @@ class EchoServerClientProtocol(asyncio.Protocol):
     def __init__(self):
         self.transport = None
         self.peername = None
+        self.displayer = None
         self.buffer = b""
 
     def connection_made(self, transport):
         self.peername = transport.get_extra_info('peername')
         self.transport = transport
+        self.displayer = show_data.Displayer(
+                stream=sys.stdout,
+                name="{}:{}".format(self.peername[0], self.peername[1]))
         print('Accepted connection from {}'.format(self.peername))
 
     def data_received(self, data):
-        print('Data received from {}: {}'.format(
-            self.peername, data))
+        self.displayer.show(data)
         self.transport.write(b"\xFF\x01\x00\x00\xFF\x01\x00\x00")
 
     def connection_lost(self, exc):
